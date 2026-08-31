@@ -4,18 +4,25 @@ import React, { useState, useEffect } from "react";
 import {
   FileCheck2,
   Sparkles,
-  RotateCcw,
   BarChart3,
   UserCheck,
-  ShieldCheck,
-  Zap,
-  Target,
   Briefcase,
   Loader2,
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  UploadCloud,
+  Zap,
+  Target,
+  ShieldCheck,
 } from "lucide-react";
+import Navbar, { type NavTab } from "@/components/layout/Navbar";
+import Footer from "@/components/layout/Footer";
+import LandingPage from "@/components/landing/LandingPage";
+import DashboardHome, { type SessionMatchItem } from "@/components/dashboard/DashboardHome";
+import MatchesView from "@/components/dashboard/MatchesView";
+import OptimizerHubView from "@/components/dashboard/OptimizerHubView";
+import PricingView from "@/components/dashboard/PricingView";
 import ResumeUploader from "@/components/resume/ResumeUploader";
 import AtsScoreCard from "@/components/resume/AtsScoreCard";
 import ParsedResumeView from "@/components/resume/ParsedResumeView";
@@ -29,12 +36,12 @@ import type { MatchResult } from "@/lib/types/match";
 import type { ResumeOptimizationResult } from "@/lib/types/optimization";
 
 export default function Home() {
+  const [currentTab, setCurrentTab] = useState<NavTab>("landing");
   const [analysisResult, setAnalysisResult] = useState<ResumeAnalysisResult | null>(null);
-  const [activeTab, setActiveTab] = useState<"ats" | "profile" | "jobs">("ats");
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [analyzerSubTab, setAnalyzerSubTab] = useState<"ats" | "profile">("ats");
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
   // Job Search States
-  const [viewMode, setViewMode] = useState<"analyzer" | "jobs">("analyzer");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState<boolean>(false);
   const [jobsError, setJobsError] = useState<string | null>(null);
@@ -49,11 +56,12 @@ export default function Home() {
   });
   const [searchResult, setSearchResult] = useState<JobSearchResult | null>(null);
 
-  // Phase 3: AI Job Matching States
+  // Phase 3: AI Job Matching States & Session History
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
   const [matchedJob, setMatchedJob] = useState<Job | null>(null);
   const [matchingJobId, setMatchingJobId] = useState<string | null>(null);
   const [matchError, setMatchError] = useState<string | null>(null);
+  const [sessionMatches, setSessionMatches] = useState<SessionMatchItem[]>([]);
 
   // Phase 4: AI Resume Optimizer States
   const [optimizationResult, setOptimizationResult] = useState<ResumeOptimizationResult | null>(null);
@@ -64,18 +72,22 @@ export default function Home() {
 
   const handleReset = () => {
     setAnalysisResult(null);
-    setActiveTab("ats");
+    setAnalyzerSubTab("ats");
     setMatchResult(null);
     setMatchedJob(null);
     setOptimizationResult(null);
     setIsOptimizerOpen(false);
     setOptimizingJob(null);
     setOptimizationError(null);
+    setCurrentTab("analyzer");
   };
 
   // Phase 3: Analyze match between resume and a specific job
   const handleAnalyzeMatch = async (job: Job) => {
-    if (!analysisResult?.parsedResume) return;
+    if (!analysisResult?.parsedResume) {
+      setCurrentTab("analyzer");
+      return;
+    }
 
     setMatchingJobId(job.id);
     setMatchError(null);
@@ -98,7 +110,21 @@ export default function Home() {
         throw new Error(result.error || "Failed to analyze job match.");
       }
 
-      setMatchResult(result.data);
+      const matchData: MatchResult = result.data;
+      setMatchResult(matchData);
+
+      // Record in session matches history
+      setSessionMatches((prev) => {
+        const filtered = prev.filter((m) => m.job.id !== job.id);
+        return [
+          {
+            job,
+            matchResult: matchData,
+            analyzedAt: new Date().toISOString(),
+          },
+          ...filtered,
+        ];
+      });
     } catch (err: unknown) {
       console.error("Error analyzing match:", err);
       setMatchError(
@@ -111,7 +137,10 @@ export default function Home() {
 
   // Phase 4: Optimize Resume for a specific target job
   const handleOptimizeResume = async (job: Job, currentMatch?: MatchResult | null) => {
-    if (!analysisResult?.parsedResume) return;
+    if (!analysisResult?.parsedResume) {
+      setCurrentTab("analyzer");
+      return;
+    }
 
     setIsOptimizing(true);
     setOptimizationError(null);
@@ -147,10 +176,10 @@ export default function Home() {
     }
   };
 
-  // Fetch jobs effect
+  // Fetch jobs effect when Job Search tab is active or filters change
   useEffect(() => {
     let ignore = false;
-    if (viewMode === "jobs" || activeTab === "jobs") {
+    if (currentTab === "jobs") {
       const loadJobs = async () => {
         setJobsLoading(true);
         setJobsError(null);
@@ -197,7 +226,7 @@ export default function Home() {
     return () => {
       ignore = true;
     };
-  }, [filters, viewMode, activeTab]);
+  }, [filters, currentTab]);
 
   const handleFilterChange = (newFilters: FilterType) => {
     setFilters(newFilters);
@@ -207,16 +236,30 @@ export default function Home() {
     setFilters((prev) => ({ ...prev, page: newPage }));
   };
 
+  // Render Job Search View
   const renderJobSearch = () => {
     return (
       <div className="space-y-6">
-        <div className="text-center max-w-2xl mx-auto mb-4">
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Search Available Positions
-          </h2>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Explore and filter career opportunities using our provider-independent search engine.
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-zinc-200 dark:border-zinc-800">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+              Live Job Discovery
+            </h2>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+              Explore positions across tech, engineering, design, and product with live AI match evaluation.
+            </p>
+          </div>
+
+          {!analysisResult && (
+            <button
+              type="button"
+              onClick={() => setCurrentTab("analyzer")}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/40 rounded-xl text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors cursor-pointer self-start sm:self-auto"
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              <span>Upload Resume for Match Scores</span>
+            </button>
+          )}
         </div>
 
         <JobSearchFiltersComponent
@@ -313,254 +356,218 @@ export default function Home() {
     );
   };
 
-  return (
-    <div className="min-h-screen flex flex-col justify-between">
-      {/* Navigation Header */}
-      <header className="sticky top-0 z-30 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
-                <FileCheck2 className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="font-bold text-base text-zinc-900 dark:text-zinc-50 tracking-tight">
-                  ResumeAI
-                </span>
-                <span className="hidden sm:inline-block ml-2 text-xs font-medium text-zinc-500">
-                  AI Resume Analyzer & ATS Scorecard
-                </span>
-              </div>
-            </div>
-
-            {/* View Mode Tabs in Header */}
-            <nav className="hidden md:flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800/80 p-1 rounded-xl">
-              <button
-                type="button"
-                onClick={() => setViewMode("analyzer")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  viewMode === "analyzer"
-                    ? "bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs"
-                    : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                }`}
-              >
-                Resume Analyzer
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("jobs")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  viewMode === "jobs"
-                    ? "bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs"
-                    : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                }`}
-              >
-                Job Search
-              </button>
-            </nav>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {/* Mobile View Switcher */}
-            <div className="flex md:hidden bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setViewMode("analyzer")}
-                className={`p-1.5 rounded-md ${
-                  viewMode === "analyzer"
-                    ? "bg-white dark:bg-zinc-900 text-blue-600"
-                    : "text-zinc-500"
-                }`}
-                title="Analyzer"
-              >
-                <FileCheck2 className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("jobs")}
-                className={`p-1.5 rounded-md ${
-                  viewMode === "jobs"
-                    ? "bg-white dark:bg-zinc-900 text-blue-600"
-                    : "text-zinc-500"
-                }`}
-                title="Jobs"
-              >
-                <Briefcase className="w-4 h-4" />
-              </button>
-            </div>
-
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 rounded-full text-xs font-semibold">
+  // Render Resume Analyzer View
+  const renderResumeAnalyzer = () => {
+    if (!analysisResult) {
+      return (
+        <div className="space-y-12">
+          <div className="text-center max-w-2xl mx-auto space-y-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 text-xs font-semibold border border-blue-200/50 dark:border-blue-800/50">
               <Sparkles className="w-3.5 h-3.5" />
-              Powered by Gemini
-            </span>
-
-            {analysisResult && (
-              <button
-                type="button"
-                onClick={handleReset}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Upload New
-              </button>
-            )}
+              <span>Real-Time Resume Diagnostics & ATS Scorecard</span>
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+              Upload Your Resume for AI Analysis
+            </h1>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              Upload your document in PDF, DOCX, or TXT format. Receive an objective ATS score, quantifiable impact evaluation, and structured skill breakdown powered by Gemini.
+            </p>
           </div>
-        </div>
-      </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12">
-        {viewMode === "jobs" ? (
-          /* View 3: Independent Job Search */
-          renderJobSearch()
-        ) : !analysisResult ? (
-          /* View 1: Upload & Intro */
-          <div className="space-y-12">
-            <div className="text-center max-w-2xl mx-auto">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 text-xs font-semibold mb-4 border border-blue-200/50 dark:border-blue-800/50">
-                <span>AI Career Suite</span>
-                <span>•</span>
-                <span>Resume Extraction, ATS Scoring, Job Match & Optimizer</span>
+          <ResumeUploader
+            onAnalysisSuccess={(data) => {
+              setAnalysisResult(data);
+              setAnalyzerSubTab("ats");
+            }}
+            isLoading={isUploading}
+            setIsLoading={setIsUploading}
+          />
+
+          {/* Feature Highlights */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 pt-4">
+            <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                <BarChart3 className="w-4 h-4" />
               </div>
-              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
-                Unlock Real-Time ATS Insights for Your Resume
-              </h1>
-              <p className="mt-3 text-base text-zinc-600 dark:text-zinc-400">
-                Upload your resume in PDF or DOCX format to receive an objective ATS quality evaluation, quantifiable impact score, and structured skill breakdown powered by Gemini.
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                0–100 ATS Scorecard
+              </h3>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Objective grading across impact quantification, action verbs, and structure.
               </p>
             </div>
 
-            {/* Resume Uploader Component */}
-            <ResumeUploader
-              onAnalysisSuccess={(data) => {
-                setAnalysisResult(data);
-                setActiveTab("ats");
-              }}
-              isLoading={isLoading}
-              setIsLoading={setIsLoading}
-            />
-
-            {/* Feature Highlights Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 pt-6">
-              <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-3">
-                  <BarChart3 className="w-5 h-5" />
-                </div>
-                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  ATS Scorecard (0–100)
-                </h3>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Objective grading across impact quantification, action verbs, structure, and keyword density.
-                </p>
+            <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                <Zap className="w-4 h-4" />
               </div>
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                Skill Group Matrix
+              </h3>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Extracts languages, frameworks, cloud tools, and soft skills into structured groups.
+              </p>
+            </div>
 
-              <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs">
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
-                  <Zap className="w-5 h-5" />
-                </div>
-                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  Skills & Tech Matrix
-                </h3>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Extracts and categorizes technical skills, libraries, tools, cloud infrastructure, and soft skills.
-                </p>
+            <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                <Target className="w-4 h-4" />
               </div>
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                Actionable Fixes
+              </h3>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Highlights critical fixes, missing sections, and recommended industry keywords.
+              </p>
+            </div>
 
-              <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs">
-                <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-3">
-                  <Target className="w-5 h-5" />
-                </div>
-                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  AI Job Match & Optimization
-                </h3>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Calculates compatibility against live job listings and delivers grounded resume optimizations.
-                </p>
+            <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                <ShieldCheck className="w-4 h-4" />
               </div>
-
-              <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center mb-3">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  Zero Hallucination
-                </h3>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Strict schema-driven optimization guarantees no skills, employers, or metrics are fabricated.
-                </p>
-              </div>
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                Zero Hallucination
+              </h3>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Strict schema validation ensures only facts present on your resume are extracted.
+              </p>
             </div>
           </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-8">
+        {/* Candidate Profile Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-6 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-sm shrink-0">
+              <FileCheck2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-50">
+                {analysisResult.parsedResume.contact.name || "Candidate Profile"}
+              </h2>
+              <p className="text-xs text-zinc-500">
+                {analysisResult.parsedResume.targetRoleOrTitle} • Analyzed via Gemini Intelligence
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Sub-tab switcher */}
+            <div className="inline-flex p-1 bg-zinc-100 dark:bg-zinc-800 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setAnalyzerSubTab("ats")}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                  analyzerSubTab === "ats"
+                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs"
+                    : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>ATS Scorecard</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnalyzerSubTab("profile")}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                  analyzerSubTab === "profile"
+                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs"
+                    : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Parsed Profile</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setCurrentTab("jobs")}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+            >
+              <Briefcase className="w-3.5 h-3.5" />
+              <span>Match Against Jobs</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Sub-tab view */}
+        {analyzerSubTab === "ats" ? (
+          <AtsScoreCard report={analysisResult.atsScoreReport} />
         ) : (
-          /* View 2: Analysis Results */
-          <div className="space-y-8">
-            {/* Top Toolbar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-6 shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                  <FileCheck2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-50">
-                    {analysisResult.parsedResume.contact.name || "Candidate Profile"}
-                  </h2>
-                  <p className="text-xs text-zinc-500">
-                    {analysisResult.parsedResume.targetRoleOrTitle} • Analyzed via Gemini
-                  </p>
-                </div>
-              </div>
-
-              {/* Tab Switcher */}
-              <div className="inline-flex p-1 bg-zinc-100 dark:bg-zinc-800 rounded-xl self-start sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("ats")}
-                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all cursor-pointer ${
-                    activeTab === "ats"
-                      ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs"
-                      : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                  }`}
-                >
-                  <BarChart3 className="w-4 h-4" />
-                  ATS Scorecard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("profile")}
-                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all cursor-pointer ${
-                    activeTab === "profile"
-                      ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs"
-                      : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                  }`}
-                >
-                  <UserCheck className="w-4 h-4" />
-                  Parsed Profile
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("jobs")}
-                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all cursor-pointer ${
-                    activeTab === "jobs"
-                      ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs"
-                      : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                  }`}
-                >
-                  <Briefcase className="w-4 h-4" />
-                  Job Search
-                </button>
-              </div>
-            </div>
-
-            {/* Active Tab View */}
-            {activeTab === "ats" ? (
-              <AtsScoreCard report={analysisResult.atsScoreReport} />
-            ) : activeTab === "profile" ? (
-              <ParsedResumeView resume={analysisResult.parsedResume} />
-            ) : (
-              renderJobSearch()
-            )}
-          </div>
+          <ParsedResumeView resume={analysisResult.parsedResume} />
         )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col justify-between bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50 transition-colors">
+      {/* Global SaaS Navigation Bar */}
+      <Navbar
+        activeTab={currentTab}
+        onSelectTab={setCurrentTab}
+        parsedResume={analysisResult?.parsedResume || null}
+        onUploadNew={handleReset}
+        matchesCount={sessionMatches.length}
+      />
+
+      {/* Main App Workspace */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        {currentTab === "landing" && (
+          <LandingPage
+            onSelectTab={setCurrentTab}
+            hasResume={!!analysisResult?.parsedResume}
+          />
+        )}
+
+        {currentTab === "dashboard" && (
+          <DashboardHome
+            analysisResult={analysisResult}
+            sessionMatches={sessionMatches}
+            optimizationResult={optimizationResult}
+            optimizingJob={optimizingJob}
+            onSelectTab={setCurrentTab}
+            onViewMatch={(job, res) => {
+              setMatchedJob(job);
+              setMatchResult(res);
+            }}
+            onOptimizeJob={(job, res) => handleOptimizeResume(job, res)}
+          />
+        )}
+
+        {currentTab === "analyzer" && renderResumeAnalyzer()}
+
+        {currentTab === "jobs" && renderJobSearch()}
+
+        {currentTab === "matches" && (
+          <MatchesView
+            sessionMatches={sessionMatches}
+            onViewMatch={(job, res) => {
+              setMatchedJob(job);
+              setMatchResult(res);
+            }}
+            onOptimizeJob={(job, res) => handleOptimizeResume(job, res)}
+            onSelectTab={setCurrentTab}
+          />
+        )}
+
+        {currentTab === "optimizer" && (
+          <OptimizerHubView
+            optimizationResult={optimizationResult}
+            optimizingJob={optimizingJob}
+            sessionMatches={sessionMatches}
+            onOpenOptimizerModal={() => setIsOptimizerOpen(true)}
+            onOptimizeJob={(job, res) => handleOptimizeResume(job, res)}
+            onSelectTab={setCurrentTab}
+          />
+        )}
+
+        {currentTab === "pricing" && <PricingView onSelectTab={setCurrentTab} />}
       </main>
 
       {/* Phase 3: AI Match Result Modal */}
@@ -595,10 +602,8 @@ export default function Home() {
         />
       )}
 
-      {/* Footer */}
-      <footer className="border-t border-zinc-200 dark:border-zinc-800 py-6 text-center text-xs text-zinc-500">
-        <p>AI Resume Analyzer & Optimizer • Powered by Gemini</p>
-      </footer>
+      {/* SaaS Global Footer */}
+      <Footer onSelectTab={setCurrentTab} />
     </div>
   );
 }
