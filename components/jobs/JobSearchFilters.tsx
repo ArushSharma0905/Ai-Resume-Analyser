@@ -1,13 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   Search,
   MapPin,
   Laptop,
   RotateCcw,
   Sparkles,
-  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { JobSearchFilters as FilterType, EmploymentType, ExperienceLevel } from "@/lib/types/job";

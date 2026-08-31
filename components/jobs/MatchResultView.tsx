@@ -12,6 +12,7 @@ import {
   Shield,
   Sparkles,
   X,
+  Loader2,
 } from "lucide-react";
 import type { MatchResult } from "@/lib/types/match";
 import type { Job } from "@/lib/types/job";
@@ -20,6 +21,8 @@ interface MatchResultViewProps {
   result: MatchResult;
   job: Job;
   onClose?: () => void;
+  onOptimize?: () => void;
+  isOptimizing?: boolean;
 }
 
 function getScoreColor(score: number): {
@@ -166,14 +169,20 @@ function BulletList({ items, icon: Icon, color }: {
   );
 }
 
-export default function MatchResultView({ result, job, onClose }: MatchResultViewProps) {
+export default function MatchResultView({
+  result,
+  job,
+  onClose,
+  onOptimize,
+  isOptimizing,
+}: MatchResultViewProps) {
   const scoreColors = getScoreColor(result.overallScore);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl">
         {/* Header */}
-        <div className="sticky top-0 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 p-6 flex items-center justify-between">
+        <div className="sticky top-0 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 p-5 sm:p-6 flex items-center justify-between gap-3 z-10">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
               <Target className="w-5 h-5" />
@@ -182,24 +191,44 @@ export default function MatchResultView({ result, job, onClose }: MatchResultVie
               <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
                 AI Match Analysis
               </h2>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate max-w-xs sm:max-w-md">
                 {job.title} • {job.company}
               </p>
             </div>
           </div>
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg transition-colors"
-              title="Close"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          )}
+
+          <div className="flex items-center gap-2">
+            {onOptimize && (
+              <button
+                type="button"
+                onClick={onOptimize}
+                disabled={isOptimizing}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 text-white text-xs font-semibold rounded-xl transition-all shadow-xs cursor-pointer disabled:cursor-not-allowed"
+                title="Optimize Resume with AI"
+              >
+                {isOptimizing ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" />
+                )}
+                <span>{isOptimizing ? "Optimizing..." : "Optimize Resume"}</span>
+              </button>
+            )}
+
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-5 sm:p-6 space-y-6">
           {/* Score & Recommendation */}
           <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-8">
             {/* Circular Score Display */}
@@ -233,9 +262,45 @@ export default function MatchResultView({ result, job, onClose }: MatchResultVie
             </div>
           </div>
 
+          {/* Call to Action: Optimize Resume Banner */}
+          {onOptimize && (
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 dark:from-blue-950/40 dark:via-indigo-950/40 dark:to-purple-950/40 border border-blue-200/70 dark:border-blue-900/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                    Tailor Your Resume for This Specific Job
+                  </h4>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
+                    Generate grounded rewrites, action-verb highlights, and ATS keyword alignments without hallucinating new facts.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onOptimize}
+                disabled={isOptimizing}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed shrink-0"
+              >
+                {isOptimizing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Optimizing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Optimize Resume</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
           {/* Skills Sections */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-
             <SkillList
               label="Matched Skills"
               skills={result.matchedSkills}

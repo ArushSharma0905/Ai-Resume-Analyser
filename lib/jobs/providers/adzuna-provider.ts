@@ -5,6 +5,20 @@ import {
   JobSearchResult,
 } from "@/lib/types/job";
 
+interface AdzunaRawJob {
+  id?: string | number;
+  title?: string;
+  company?: { display_name?: string };
+  location?: { display_name?: string };
+  salary_min?: number;
+  salary_max?: number;
+  contract_time?: string;
+  description?: string;
+  created?: string;
+  redirect_url?: string;
+  category?: { label?: string };
+}
+
 /**
  * ADZUNA JOB PROVIDER
  * -------------------
@@ -86,7 +100,7 @@ export class AdzunaJobProvider implements JobProvider {
     const totalPages = Math.ceil(totalJobs / pageSize) || 1;
 
     // Normalize raw Adzuna records into our internal Job interface
-    const normalizedJobs: Job[] = rawResults.map((item: any, idx: number) => {
+    const normalizedJobs: Job[] = rawResults.map((item: AdzunaRawJob, idx: number) => {
       const isRemoteCheck =
         item.title?.toLowerCase().includes("remote") ||
         item.description?.toLowerCase().includes("remote") ||

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import {
   FileCheck2,
   Sparkles,
@@ -13,7 +13,6 @@ import {
   Briefcase,
   Loader2,
   AlertCircle,
-
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -23,10 +22,11 @@ import ParsedResumeView from "@/components/resume/ParsedResumeView";
 import JobSearchFiltersComponent from "@/components/jobs/JobSearchFilters";
 import JobCard from "@/components/jobs/JobCard";
 import MatchResultView from "@/components/jobs/MatchResultView";
+import ResumeOptimizerView from "@/components/resume/ResumeOptimizerView";
 import type { ResumeAnalysisResult } from "@/lib/types/resume";
 import type { Job, JobSearchFilters as FilterType, JobSearchResult } from "@/lib/types/job";
 import type { MatchResult } from "@/lib/types/match";
-
+import type { ResumeOptimizationResult } from "@/lib/types/optimization";
 
 export default function Home() {
   const [analysisResult, setAnalysisResult] = useState<ResumeAnalysisResult | null>(null);
@@ -55,9 +55,22 @@ export default function Home() {
   const [matchingJobId, setMatchingJobId] = useState<string | null>(null);
   const [matchError, setMatchError] = useState<string | null>(null);
 
+  // Phase 4: AI Resume Optimizer States
+  const [optimizationResult, setOptimizationResult] = useState<ResumeOptimizationResult | null>(null);
+  const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
+  const [optimizationError, setOptimizationError] = useState<string | null>(null);
+  const [isOptimizerOpen, setIsOptimizerOpen] = useState<boolean>(false);
+  const [optimizingJob, setOptimizingJob] = useState<Job | null>(null);
+
   const handleReset = () => {
     setAnalysisResult(null);
     setActiveTab("ats");
+    setMatchResult(null);
+    setMatchedJob(null);
+    setOptimizationResult(null);
+    setIsOptimizerOpen(false);
+    setOptimizingJob(null);
+    setOptimizationError(null);
   };
 
   // Phase 3: Analyze match between resume and a specific job
@@ -96,50 +109,95 @@ export default function Home() {
     }
   };
 
+  // Phase 4: Optimize Resume for a specific target job
+  const handleOptimizeResume = async (job: Job, currentMatch?: MatchResult | null) => {
+    if (!analysisResult?.parsedResume) return;
 
-  // Fetch jobs function
-  const fetchJobs = useCallback(async (currentFilters: FilterType) => {
-    setJobsLoading(true);
-    setJobsError(null);
+    setIsOptimizing(true);
+    setOptimizationError(null);
+    setOptimizationResult(null);
+    setOptimizingJob(job);
+    setIsOptimizerOpen(true);
+
     try {
-      const params = new URLSearchParams();
-      if (currentFilters.query) params.append("query", currentFilters.query);
-      if (currentFilters.location) params.append("location", currentFilters.location);
-      if (currentFilters.isRemote !== undefined) params.append("remote", currentFilters.isRemote ? "true" : "false");
-      if (currentFilters.employmentType && currentFilters.employmentType !== "all") {
-        params.append("employmentType", currentFilters.employmentType);
-      }
-      if (currentFilters.experienceLevel && currentFilters.experienceLevel !== "all") {
-        params.append("experienceLevel", currentFilters.experienceLevel);
-      }
-      params.append("page", (currentFilters.page || 1).toString());
-      params.append("pageSize", (currentFilters.pageSize || 6).toString());
+      const response = await fetch("/api/resume/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume: analysisResult.parsedResume,
+          job: job,
+          matchResult: currentMatch || matchResult || null,
+        }),
+      });
 
-      const response = await fetch(`/api/jobs/search?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch jobs");
-      }
       const data = await response.json();
-      if (data.success && data.data) {
-        setJobs(data.data.jobs || []);
-        setSearchResult(data.data);
-      } else {
-        throw new Error(data.error || "Failed to parse job results");
-      }
-    } catch (err: unknown) {
-      console.error("Error fetching jobs:", err);
-      setJobsError(err instanceof Error ? err.message : "An unexpected error occurred while searching for jobs.");
-    } finally {
-      setJobsLoading(false);
-    }
-  }, []);
 
-  // Fetch jobs when filters change
-  useEffect(() => {
-    if (viewMode === "jobs" || activeTab === "jobs") {
-      fetchJobs(filters);
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to generate resume optimization.");
+      }
+
+      setOptimizationResult(data.data);
+    } catch (err: unknown) {
+      console.error("Error optimizing resume:", err);
+      setOptimizationError(
+        err instanceof Error ? err.message : "An unexpected error occurred during resume optimization."
+      );
+    } finally {
+      setIsOptimizing(false);
     }
-  }, [filters, viewMode, activeTab, fetchJobs]);
+  };
+
+  // Fetch jobs effect
+  useEffect(() => {
+    let ignore = false;
+    if (viewMode === "jobs" || activeTab === "jobs") {
+      const loadJobs = async () => {
+        setJobsLoading(true);
+        setJobsError(null);
+        try {
+          const params = new URLSearchParams();
+          if (filters.query) params.append("query", filters.query);
+          if (filters.location) params.append("location", filters.location);
+          if (filters.isRemote !== undefined) params.append("remote", filters.isRemote ? "true" : "false");
+          if (filters.employmentType && filters.employmentType !== "all") {
+            params.append("employmentType", filters.employmentType);
+          }
+          if (filters.experienceLevel && filters.experienceLevel !== "all") {
+            params.append("experienceLevel", filters.experienceLevel);
+          }
+          params.append("page", (filters.page || 1).toString());
+          params.append("pageSize", (filters.pageSize || 6).toString());
+
+          const response = await fetch(`/api/jobs/search?${params.toString()}`);
+          if (!response.ok) {
+            throw new Error("Failed to fetch jobs");
+          }
+          const data = await response.json();
+          if (!ignore) {
+            if (data.success && data.data) {
+              setJobs(data.data.jobs || []);
+              setSearchResult(data.data);
+            } else {
+              throw new Error(data.error || "Failed to parse job results");
+            }
+          }
+        } catch (err: unknown) {
+          if (!ignore) {
+            console.error("Error fetching jobs:", err);
+            setJobsError(err instanceof Error ? err.message : "An unexpected error occurred while searching for jobs.");
+          }
+        } finally {
+          if (!ignore) {
+            setJobsLoading(false);
+          }
+        }
+      };
+      loadJobs();
+    }
+    return () => {
+      ignore = true;
+    };
+  }, [filters, viewMode, activeTab]);
 
   const handleFilterChange = (newFilters: FilterType) => {
     setFilters(newFilters);
@@ -183,7 +241,6 @@ export default function Home() {
         )}
 
         {jobsLoading ? (
-
           <div className="flex flex-col items-center justify-center py-16 space-y-4">
             <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
             <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
@@ -195,7 +252,7 @@ export default function Home() {
             <Briefcase className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mx-auto mb-4" />
             <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">No jobs found</h3>
             <p className="text-xs text-zinc-500 mt-1 max-w-sm mx-auto leading-relaxed">
-              We couldn't find any job listings matching your search filters. Try resetting the filters or modifying your query.
+              We couldn&apos;t find any job listings matching your search filters. Try resetting the filters or modifying your query.
             </p>
           </div>
         ) : (
@@ -211,7 +268,6 @@ export default function Home() {
                   matchingJobId={matchingJobId}
                 />
               ))}
-
             </div>
 
             {/* Pagination Controls */}
@@ -305,7 +361,7 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Mobile View Switcher (Simple icons or small buttons) */}
+            {/* Mobile View Switcher */}
             <div className="flex md:hidden bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg">
               <button
                 type="button"
@@ -362,9 +418,9 @@ export default function Home() {
           <div className="space-y-12">
             <div className="text-center max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 text-xs font-semibold mb-4 border border-blue-200/50 dark:border-blue-800/50">
-                <span>Phase 1</span>
+                <span>AI Career Suite</span>
                 <span>•</span>
-                <span>Resume Extraction & ATS Quality Engine</span>
+                <span>Resume Extraction, ATS Scoring, Job Match & Optimizer</span>
               </div>
               <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
                 Unlock Real-Time ATS Insights for Your Resume
@@ -415,10 +471,10 @@ export default function Home() {
                   <Target className="w-5 h-5" />
                 </div>
                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  Actionable Improvements
+                  AI Job Match & Optimization
                 </h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Pinpoints high-priority fixes, missing sections, and recommended industry keywords.
+                  Calculates compatibility against live job listings and delivers grounded resume optimizations.
                 </p>
               </div>
 
@@ -430,7 +486,7 @@ export default function Home() {
                   Zero Hallucination
                 </h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Strict schema-driven extraction ensures only authentic candidate information is captured.
+                  Strict schema-driven optimization guarantees no skills, employers, or metrics are fabricated.
                 </p>
               </div>
             </div>
@@ -516,14 +572,33 @@ export default function Home() {
             setMatchResult(null);
             setMatchedJob(null);
           }}
+          onOptimize={() => handleOptimizeResume(matchedJob, matchResult)}
+          isOptimizing={isOptimizing && optimizingJob?.id === matchedJob.id}
+        />
+      )}
+
+      {/* Phase 4: AI Resume Optimizer Modal */}
+      {isOptimizerOpen && optimizingJob && (
+        <ResumeOptimizerView
+          result={optimizationResult}
+          job={optimizingJob}
+          matchResult={matchResult}
+          resume={analysisResult?.parsedResume}
+          isLoading={isOptimizing}
+          error={optimizationError}
+          onClose={() => {
+            setIsOptimizerOpen(false);
+            setOptimizingJob(null);
+            setOptimizationError(null);
+          }}
+          onRetry={() => handleOptimizeResume(optimizingJob, matchResult)}
         />
       )}
 
       {/* Footer */}
       <footer className="border-t border-zinc-200 dark:border-zinc-800 py-6 text-center text-xs text-zinc-500">
-        <p>AI Resume Analyzer & Matcher • Phase 1 Real-time Extraction Engine</p>
+        <p>AI Resume Analyzer & Optimizer • Powered by Gemini</p>
       </footer>
     </div>
   );
 }
-

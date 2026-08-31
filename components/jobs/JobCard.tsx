@@ -5,11 +5,9 @@ import {
   MapPin,
   Building2,
   DollarSign,
-  Briefcase,
   ExternalLink,
   Clock,
   Laptop,
-  CheckCircle,
   Loader2,
   Target,
 } from "lucide-react";

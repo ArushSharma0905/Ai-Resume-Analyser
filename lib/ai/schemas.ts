@@ -395,3 +395,166 @@ export const JOB_MATCH_JSON_SCHEMA = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// Phase 4: AI Resume Optimizer — Zod schemas & raw JSON schema for Gemini
+// ---------------------------------------------------------------------------
+
+export const SuggestedChangeSchema = z.object({
+  section: z.enum(["professionalSummary", "workExperience", "projects", "skills", "ats"]),
+  title: z.string().min(1),
+  originalText: z.string(),
+  suggestedText: z.string(),
+  reason: z.string().min(1),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+
+export const KeywordSuggestionSchema = z.object({
+  keyword: z.string().min(1),
+  context: z.string().min(1),
+  supportedByResume: z.boolean(),
+});
+
+export const IdentifiedGapSchema = z.object({
+  requirement: z.string().min(1),
+  resumeEvidence: z.string(),
+  severity: z.enum(["critical", "major", "minor"]),
+  recommendation: z.string().min(1),
+});
+
+export const OptimizedExperienceItemSchema = z.object({
+  company: z.string().default("Company"),
+  role: z.string().default("Role"),
+  location: z.string().nullable().optional().default(null),
+  startDate: z.string().default(""),
+  endDate: z.string().default(""),
+  isCurrent: z.boolean().default(false),
+  optimizedHighlights: z.array(z.string()).default([]),
+  technologies: z.array(z.string()).default([]),
+});
+
+export const OptimizedProjectItemSchema = z.object({
+  name: z.string().default("Project"),
+  optimizedDescription: z.string().default(""),
+  role: z.string().nullable().optional().default(null),
+  optimizedTechnologies: z.array(z.string()).default([]),
+  optimizedHighlights: z.array(z.string()).default([]),
+  link: z.string().nullable().optional().default(null),
+});
+
+export const ResumeOptimizationResultSchema = z.object({
+  optimizedSummary: z.string().default(""),
+  optimizedExperience: z.array(OptimizedExperienceItemSchema).default([]),
+  optimizedProjects: z.array(OptimizedProjectItemSchema).default([]),
+  optimizedSkills: SkillGroupSchema.default({
+    technicalSkills: [],
+    frameworksAndLibraries: [],
+    toolsAndCloud: [],
+    softSkills: [],
+    languages: [],
+  }),
+  keywordSuggestions: z.array(KeywordSuggestionSchema).default([]),
+  atsImprovements: z.array(z.string()).default([]),
+  identifiedGaps: z.array(IdentifiedGapSchema).default([]),
+  changes: z.array(SuggestedChangeSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+});
+
+export type ResumeOptimizationResult = z.infer<typeof ResumeOptimizationResultSchema>;
+
+/**
+ * Raw JSON Schema object passed to Gemini as `config.responseSchema`.
+ * Must mirror ResumeOptimizationResultSchema so Gemini produces compliant JSON.
+ */
+export const RESUME_OPTIMIZATION_JSON_SCHEMA = {
+  type: "OBJECT" as const,
+  properties: {
+    optimizedSummary: { type: "STRING" as const },
+    optimizedExperience: {
+      type: "ARRAY" as const,
+      items: {
+        type: "OBJECT" as const,
+        properties: {
+          company: { type: "STRING" as const },
+          role: { type: "STRING" as const },
+          location: { type: "STRING" as const },
+          startDate: { type: "STRING" as const },
+          endDate: { type: "STRING" as const },
+          isCurrent: { type: "BOOLEAN" as const },
+          optimizedHighlights: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+          technologies: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+        },
+        required: ["company", "role", "startDate", "endDate", "isCurrent", "optimizedHighlights", "technologies"],
+      },
+    },
+    optimizedProjects: {
+      type: "ARRAY" as const,
+      items: {
+        type: "OBJECT" as const,
+        properties: {
+          name: { type: "STRING" as const },
+          optimizedDescription: { type: "STRING" as const },
+          role: { type: "STRING" as const },
+          optimizedTechnologies: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+          optimizedHighlights: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+          link: { type: "STRING" as const },
+        },
+        required: ["name", "optimizedDescription", "optimizedTechnologies", "optimizedHighlights"],
+      },
+    },
+    optimizedSkills: {
+      type: "OBJECT" as const,
+      properties: {
+        technicalSkills: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+        frameworksAndLibraries: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+        toolsAndCloud: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+        softSkills: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+        languages: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+      },
+      required: ["technicalSkills", "frameworksAndLibraries", "toolsAndCloud", "softSkills", "languages"],
+    },
+    keywordSuggestions: {
+      type: "ARRAY" as const,
+      items: {
+        type: "OBJECT" as const,
+        properties: {
+          keyword: { type: "STRING" as const },
+          context: { type: "STRING" as const },
+          supportedByResume: { type: "BOOLEAN" as const },
+        },
+        required: ["keyword", "context", "supportedByResume"],
+      },
+    },
+    atsImprovements: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+    identifiedGaps: {
+      type: "ARRAY" as const,
+      items: {
+        type: "OBJECT" as const,
+        properties: {
+          requirement: { type: "STRING" as const },
+          resumeEvidence: { type: "STRING" as const },
+          severity: { type: "STRING" as const, enum: ["critical", "major", "minor"] },
+          recommendation: { type: "STRING" as const },
+        },
+        required: ["requirement", "resumeEvidence", "severity", "recommendation"],
+      },
+    },
+    changes: {
+      type: "ARRAY" as const,
+      items: {
+        type: "OBJECT" as const,
+        properties: {
+          section: { type: "STRING" as const, enum: ["professionalSummary", "workExperience", "projects", "skills", "ats"] },
+          title: { type: "STRING" as const },
+          originalText: { type: "STRING" as const },
+          suggestedText: { type: "STRING" as const },
+          reason: { type: "STRING" as const },
+          confidence: { type: "STRING" as const, enum: ["high", "medium", "low"] },
+        },
+        required: ["section", "title", "originalText", "suggestedText", "reason", "confidence"],
+      },
+    },
+    warnings: { type: "ARRAY" as const, items: { type: "STRING" as const } },
+  },
+  required: ["optimizedSummary", "optimizedExperience", "optimizedProjects", "optimizedSkills", "keywordSuggestions", "atsImprovements", "identifiedGaps", "changes", "warnings"],
+};
+
