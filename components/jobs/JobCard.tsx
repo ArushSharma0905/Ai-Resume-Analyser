@@ -10,6 +10,8 @@ import {
   Laptop,
   Loader2,
   Target,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 import { Job } from "@/lib/types/job";
 import type { ParsedResume } from "@/lib/types/resume";
@@ -20,8 +22,9 @@ interface JobCardProps {
   onAnalyzeMatch?: (job: Job) => void;
   isMatching?: boolean;
   matchingJobId?: string | null;
+  isSaved?: boolean;
+  onToggleSave?: (job: Job) => void;
 }
-
 
 function formatSalary(job: Job): string | null {
   if (!job.salaryMin && !job.salaryMax) return null;
@@ -64,17 +67,24 @@ function formatPostedDate(dateStr?: string | null): string {
   }
 }
 
-export default function JobCard({ job, parsedResume, onAnalyzeMatch, isMatching, matchingJobId }: JobCardProps) {
+export default function JobCard({
+  job,
+  parsedResume,
+  onAnalyzeMatch,
+  isMatching,
+  matchingJobId,
+  isSaved = false,
+  onToggleSave,
+}: JobCardProps) {
   const salaryString = formatSalary(job);
   const isMock = job.provider === "mock";
   const isThisJobMatching = isMatching && matchingJobId === job.id;
   const canAnalyzeMatch = !!parsedResume && !!onAnalyzeMatch;
 
-
   return (
     <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-blue-300 dark:hover:border-blue-800/80 rounded-2xl p-5 sm:p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between group">
       <div>
-        {/* Header Badges & Provider Info */}
+        {/* Header Badges, Provider Info & Bookmark */}
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex flex-wrap items-center gap-1.5">
             {job.isRemote ? (
@@ -102,11 +112,33 @@ export default function JobCard({ job, parsedResume, onAnalyzeMatch, isMatching,
             )}
           </div>
 
-          {isMock && (
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
-              Demo
-            </span>
-          )}
+          <div className="flex items-center gap-1.5">
+            {isMock && (
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
+                Demo
+              </span>
+            )}
+
+            {onToggleSave && (
+              <button
+                type="button"
+                onClick={() => onToggleSave(job)}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  isSaved
+                    ? "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60"
+                    : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                }`}
+                title={isSaved ? "Remove from saved jobs" : "Save job listing"}
+                aria-label={isSaved ? "Unsave job" : "Save job"}
+              >
+                {isSaved ? (
+                  <BookmarkCheck className="w-4 h-4 fill-blue-600 dark:fill-blue-400" />
+                ) : (
+                  <Bookmark className="w-4 h-4" />
+                )}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Job Title & Company */}
@@ -190,7 +222,7 @@ export default function JobCard({ job, parsedResume, onAnalyzeMatch, isMatching,
             href={job.applicationUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-semibold rounded-lg transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-semibold rounded-lg transition-colors cursor-pointer"
           >
             <span>Apply</span>
             <ExternalLink className="w-3.5 h-3.5" />
@@ -200,4 +232,3 @@ export default function JobCard({ job, parsedResume, onAnalyzeMatch, isMatching,
     </div>
   );
 }
-

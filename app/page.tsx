@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   FileCheck2,
   Sparkles,
@@ -34,12 +35,38 @@ import type { ResumeAnalysisResult } from "@/lib/types/resume";
 import type { Job, JobSearchFilters as FilterType, JobSearchResult } from "@/lib/types/job";
 import type { MatchResult } from "@/lib/types/match";
 import type { ResumeOptimizationResult } from "@/lib/types/optimization";
+import type { SavedJobRow } from "@/lib/db/types";
+import { useAuth } from "@/lib/context/AuthContext";
+import {
+  saveUserResumeAndAnalysis,
+  getLatestUserResume,
+} from "@/lib/db/resumes";
+import {
+  saveUserJobMatch,
+  getUserJobMatches,
+} from "@/lib/db/matches";
+import {
+  saveUserResumeOptimization,
+  getLatestUserResumeOptimization,
+} from "@/lib/db/optimizations";
+import {
+  saveUserJob,
+  removeUserSavedJob,
+  getUserSavedJobs,
+} from "@/lib/db/saved-jobs";
 
 export default function Home() {
+  const router = useRouter();
+  const { user } = useAuth();
+
   const [currentTab, setCurrentTab] = useState<NavTab>("landing");
   const [analysisResult, setAnalysisResult] = useState<ResumeAnalysisResult | null>(null);
   const [analyzerSubTab, setAnalyzerSubTab] = useState<"ats" | "profile">("ats");
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [activeResumeDbId, setActiveResumeDbId] = useState<string | null>(null);
+
+  // Saved Jobs State
+  const [savedJobs, setSavedJobs] = useState<SavedJobRow[]>([]);
 
   // Job Search States
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -70,8 +97,93 @@ export default function Home() {
   const [isOptimizerOpen, setIsOptimizerOpen] = useState<boolean>(false);
   const [optimizingJob, setOptimizingJob] = useState<Job | null>(null);
 
+  // Load user data from Supabase when authenticated
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (!user) {
+      return;
+    }
+
+    const loadUserData = async () => {
+      try {
+        // 1. Fetch latest saved resume and analysis
+        const resumeData = await getLatestUserResume(user.id);
+        if (!isCancelled && resumeData) {
+          setActiveResumeDbId(resumeData.resume.id);
+          setAnalysisResult({
+            parsedResume: resumeData.resume.parsed_data,
+            atsScoreReport: resumeData.analysis
+              ? {
+                  overallScore: resumeData.analysis.overall_score,
+                  summary: resumeData.analysis.summary || "",
+                  breakdown: resumeData.analysis.breakdown,
+                  keyStrengths: resumeData.analysis.key_strengths || [],
+                  criticalImprovements: resumeData.analysis.critical_improvements || [],
+                  missingElements: resumeData.analysis.missing_elements || [],
+                  detectedKeywords: resumeData.analysis.detected_keywords || [],
+                  recommendedKeywords: resumeData.analysis.recommended_keywords || [],
+                }
+              : {
+                  overallScore: 75,
+                  summary: "Profile loaded from Supabase storage.",
+                  breakdown: {
+                    impactAndQuantification: { score: 75, title: "Impact", status: "good", feedback: [] },
+                    actionVerbsAndLanguage: { score: 75, title: "Language", status: "good", feedback: [] },
+                    structureAndCompleteness: { score: 75, title: "Structure", status: "good", feedback: [] },
+                    skillsAndKeywords: { score: 75, title: "Keywords", status: "good", feedback: [] },
+                  },
+                  keyStrengths: [],
+                  criticalImprovements: [],
+                  missingElements: [],
+                  detectedKeywords: [],
+                  recommendedKeywords: [],
+                },
+            rawTextLength: resumeData.resume.raw_text_length || 0,
+          });
+        }
+
+        // 2. Fetch saved job matches
+        const matchesData = await getUserJobMatches(user.id);
+        if (!isCancelled && matchesData && matchesData.length > 0) {
+          setSessionMatches(
+            matchesData.map((m) => ({
+              job: m.job_data,
+              matchResult: m.match_result,
+              analyzedAt: m.created_at,
+            }))
+          );
+        }
+
+        // 3. Fetch saved bookmarked jobs
+        const savedData = await getUserSavedJobs(user.id);
+        if (!isCancelled && savedData) {
+          setSavedJobs(savedData);
+        }
+
+        // 4. Fetch latest optimization
+        const optData = await getLatestUserResumeOptimization(user.id);
+        if (!isCancelled && optData) {
+          setOptimizationResult(optData.optimization_result);
+          if (optData.job_data) {
+            setOptimizingJob(optData.job_data);
+          }
+        }
+      } catch (err) {
+        console.error("Error loading user data from Supabase:", err);
+      }
+    };
+
+    loadUserData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [user]);
+
   const handleReset = () => {
     setAnalysisResult(null);
+    setActiveResumeDbId(null);
     setAnalyzerSubTab("ats");
     setMatchResult(null);
     setMatchedJob(null);
@@ -80,6 +192,29 @@ export default function Home() {
     setOptimizingJob(null);
     setOptimizationError(null);
     setCurrentTab("analyzer");
+  };
+
+  // Called when ResumeUploader finishes analysis successfully
+  const handleAnalysisSuccess = (data: ResumeAnalysisResult & { fileName?: string }) => {
+    setAnalysisResult(data);
+    setAnalyzerSubTab("ats");
+
+    // Persist to Supabase if authenticated
+    if (user) {
+      saveUserResumeAndAnalysis(
+        user.id,
+        data,
+        data.fileName || "Uploaded Resume"
+      )
+        .then((res) => {
+          if (res?.resumeId) {
+            setActiveResumeDbId(res.resumeId);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to persist resume to Supabase:", err);
+        });
+    }
   };
 
   // Phase 3: Analyze match between resume and a specific job
@@ -125,6 +260,13 @@ export default function Home() {
           ...filtered,
         ];
       });
+
+      // Persist match to Supabase if authenticated
+      if (user) {
+        saveUserJobMatch(user.id, job, matchData, activeResumeDbId).catch(
+          (err) => console.error("Failed to persist match to Supabase:", err)
+        );
+      }
     } catch (err: unknown) {
       console.error("Error analyzing match:", err);
       setMatchError(
@@ -165,7 +307,21 @@ export default function Home() {
         throw new Error(data.error || "Failed to generate resume optimization.");
       }
 
-      setOptimizationResult(data.data);
+      const optData: ResumeOptimizationResult = data.data;
+      setOptimizationResult(optData);
+
+      // Persist optimization to Supabase if authenticated
+      if (user) {
+        saveUserResumeOptimization(
+          user.id,
+          job,
+          optData,
+          currentMatch || matchResult || null,
+          activeResumeDbId
+        ).catch((err) =>
+          console.error("Failed to persist optimization to Supabase:", err)
+        );
+      }
     } catch (err: unknown) {
       console.error("Error optimizing resume:", err);
       setOptimizationError(
@@ -175,6 +331,37 @@ export default function Home() {
       setIsOptimizing(false);
     }
   };
+
+  // Toggle saving a bookmarked job
+  const handleToggleSaveJob = useCallback(
+    async (job: Job) => {
+      if (!user) {
+        // Prompt guest user to sign in
+        router.push(`/login?next=${encodeURIComponent("/?tab=jobs")}`);
+        return;
+      }
+
+      const isAlreadySaved = savedJobs.some((s) => s.job_id === job.id);
+
+      if (isAlreadySaved) {
+        setSavedJobs((prev) => prev.filter((s) => s.job_id !== job.id));
+        await removeUserSavedJob(user.id, job.id);
+      } else {
+        const optimisticRow: SavedJobRow = {
+          id: `temp-${Date.now()}`,
+          user_id: user.id,
+          job_id: job.id,
+          job_data: job,
+          notes: null,
+          status: "saved",
+          created_at: new Date().toISOString(),
+        };
+        setSavedJobs((prev) => [optimisticRow, ...prev]);
+        await saveUserJob(user.id, job);
+      }
+    },
+    [user, savedJobs, router]
+  );
 
   // Fetch jobs effect when Job Search tab is active or filters change
   useEffect(() => {
@@ -309,6 +496,8 @@ export default function Home() {
                   onAnalyzeMatch={handleAnalyzeMatch}
                   isMatching={matchingJobId !== null}
                   matchingJobId={matchingJobId}
+                  isSaved={savedJobs.some((s) => s.job_id === job.id)}
+                  onToggleSave={handleToggleSaveJob}
                 />
               ))}
             </div>
@@ -375,10 +564,7 @@ export default function Home() {
           </div>
 
           <ResumeUploader
-            onAnalysisSuccess={(data) => {
-              setAnalysisResult(data);
-              setAnalyzerSubTab("ats");
-            }}
+            onAnalysisSuccess={handleAnalysisSuccess}
             isLoading={isUploading}
             setIsLoading={setIsUploading}
           />
@@ -451,6 +637,7 @@ export default function Home() {
               </h2>
               <p className="text-xs text-zinc-500">
                 {analysisResult.parsedResume.targetRoleOrTitle} • Analyzed via Gemini Intelligence
+                {activeResumeDbId && " • Synced"}
               </p>
             </div>
           </div>
@@ -531,12 +718,14 @@ export default function Home() {
             sessionMatches={sessionMatches}
             optimizationResult={optimizationResult}
             optimizingJob={optimizingJob}
+            savedJobs={savedJobs}
             onSelectTab={setCurrentTab}
             onViewMatch={(job, res) => {
               setMatchedJob(job);
               setMatchResult(res);
             }}
             onOptimizeJob={(job, res) => handleOptimizeResume(job, res)}
+            onRemoveSavedJob={(jobId) => handleToggleSaveJob({ id: jobId } as Job)}
           />
         )}
 

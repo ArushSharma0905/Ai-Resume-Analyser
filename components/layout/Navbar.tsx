@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import {
   FileCheck2,
   LayoutDashboard,
@@ -15,8 +16,12 @@ import {
   UploadCloud,
   RotateCcw,
   ShieldCheck,
+  LogOut,
+  LogIn,
+  UserPlus,
 } from "lucide-react";
 import type { ParsedResume } from "@/lib/types/resume";
+import { useAuth } from "@/lib/context/AuthContext";
 
 export type NavTab =
   | "landing"
@@ -43,8 +48,33 @@ export default function Navbar({
   matchesCount,
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const navItems: { id: NavTab; label: string; icon: React.ElementType; badge?: string | number }[] = [
+  const { user, profile, signOut, isLoading } = useAuth();
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        setUserDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const navItems: {
+    id: NavTab;
+    label: string;
+    icon: React.ElementType;
+    badge?: string | number;
+  }[] = [
     { id: "landing", label: "Overview", icon: HomeIcon },
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     {
@@ -67,7 +97,23 @@ export default function Navbar({
   const handleNavClick = (tab: NavTab) => {
     onSelectTab(tab);
     setMobileMenuOpen(false);
+    setUserDropdownOpen(false);
   };
+
+  const handleSignOut = async () => {
+    setUserDropdownOpen(false);
+    setMobileMenuOpen(false);
+    await signOut();
+  };
+
+  const displayName =
+    profile?.full_name ||
+    parsedResume?.contact?.name ||
+    user?.user_metadata?.full_name ||
+    user?.email?.split("@")[0] ||
+    "User";
+
+  const userInitial = displayName.charAt(0).toUpperCase();
 
   return (
     <header className="sticky top-0 z-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 transition-colors">
@@ -114,7 +160,11 @@ export default function Navbar({
                     : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200/50 dark:hover:bg-zinc-700/40"
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 ${isActive ? "text-blue-600 dark:text-blue-400" : ""}`} />
+                <Icon
+                  className={`w-3.5 h-3.5 ${
+                    isActive ? "text-blue-600 dark:text-blue-400" : ""
+                  }`}
+                />
                 <span>{item.label}</span>
                 {item.badge !== undefined && (
                   <span
@@ -134,7 +184,7 @@ export default function Navbar({
 
         {/* Right Action & User Controls */}
         <div className="flex items-center gap-2.5">
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40 rounded-full text-[11px] font-semibold">
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40 rounded-full text-[11px] font-semibold">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             <span>Gemini AI Grounded</span>
           </div>
@@ -153,20 +203,98 @@ export default function Navbar({
             <button
               type="button"
               onClick={() => handleNavClick("analyzer")}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
             >
               <UploadCloud className="w-3.5 h-3.5" />
-              <span>Upload Resume</span>
+              <span className="hidden sm:inline">Upload Resume</span>
             </button>
           )}
 
-          {/* User Account / Profile Placeholder */}
-          <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-zinc-200 dark:border-zinc-800">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-700 to-zinc-900 dark:from-zinc-200 dark:to-white text-white dark:text-zinc-900 flex items-center justify-center text-xs font-bold shadow-xs">
-              {parsedResume?.contact?.name
-                ? parsedResume.contact.name.charAt(0).toUpperCase()
-                : "G"}
-            </div>
+          {/* User Account / Profile Controls */}
+          <div
+            className="relative hidden sm:flex items-center pl-2 border-l border-zinc-200 dark:border-zinc-800"
+            ref={dropdownRef}
+          >
+            {isLoading ? (
+              <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+            ) : user ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                  className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-700 text-white flex items-center justify-center text-xs font-bold shadow-xs hover:ring-2 hover:ring-blue-400 dark:hover:ring-blue-500 transition-all cursor-pointer"
+                  title={displayName}
+                  aria-label="User menu"
+                >
+                  {userInitial}
+                </button>
+
+                {/* Dropdown Menu */}
+                {userDropdownOpen && (
+                  <div className="absolute right-0 top-11 w-56 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="px-4 py-2.5 border-b border-zinc-100 dark:border-zinc-800">
+                      <p className="text-xs font-bold text-zinc-900 dark:text-zinc-50 truncate">
+                        {displayName}
+                      </p>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-0.5">
+                        {user.email}
+                      </p>
+                      <span className="inline-flex items-center mt-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200/50 dark:border-blue-900/40">
+                        Free Account
+                      </span>
+                    </div>
+
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        onClick={() => handleNavClick("dashboard")}
+                        className="w-full text-left px-4 py-2 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer"
+                      >
+                        <LayoutDashboard className="w-3.5 h-3.5" />
+                        <span>My Dashboard</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleNavClick("matches")}
+                        className="w-full text-left px-4 py-2 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Target className="w-3.5 h-3.5" />
+                        <span>Saved Job Matches</span>
+                      </button>
+                    </div>
+
+                    <div className="pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={handleSignOut}
+                        className="w-full text-left px-4 py-2 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 flex items-center gap-2 cursor-pointer font-medium"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <Link
+                  href="/login"
+                  className="px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white rounded-lg transition-colors inline-flex items-center gap-1"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign In</span>
+                </Link>
+                <Link
+                  href="/signup"
+                  className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/40 rounded-lg text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors inline-flex items-center gap-1"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Sign Up</span>
+                </Link>
+              </div>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -183,33 +311,76 @@ export default function Navbar({
 
       {/* Mobile Navigation Drawer */}
       {mobileMenuOpen && (
-        <div className="md:hidden border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-1 shadow-lg animate-in slide-in-from-top-2 duration-150">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleNavClick(item.id)}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold rounded-xl transition-colors cursor-pointer ${
-                  isActive
-                    ? "bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-bold"
-                    : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <Icon className="w-4 h-4" />
-                  <span>{item.label}</span>
+        <div className="md:hidden border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3 shadow-lg animate-in slide-in-from-top-2 duration-150">
+          {/* User Status Bar in Mobile */}
+          {user ? (
+            <div className="p-3 bg-zinc-50 dark:bg-zinc-800/60 rounded-xl border border-zinc-200/60 dark:border-zinc-700/60 flex items-center justify-between">
+              <div className="flex items-center gap-2.5 truncate">
+                <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                  {userInitial}
                 </div>
-                {item.badge !== undefined && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
-                    {item.badge}
-                  </span>
-                )}
+                <div className="truncate">
+                  <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                    {displayName}
+                  </p>
+                  <p className="text-[11px] text-zinc-500 truncate">{user.email}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="px-2.5 py-1 text-xs text-rose-600 dark:text-rose-400 font-bold hover:underline cursor-pointer"
+              >
+                Sign Out
               </button>
-            );
-          })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 pb-2 border-b border-zinc-100 dark:border-zinc-800">
+              <Link
+                href="/login"
+                onClick={() => setMobileMenuOpen(false)}
+                className="py-2 text-center text-xs font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 rounded-xl"
+              >
+                Sign In
+              </Link>
+              <Link
+                href="/signup"
+                onClick={() => setMobileMenuOpen(false)}
+                className="py-2 text-center text-xs font-bold text-white bg-blue-600 rounded-xl shadow-xs"
+              >
+                Sign Up Free
+              </Link>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleNavClick(item.id)}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold rounded-xl transition-colors cursor-pointer ${
+                    isActive
+                      ? "bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-bold"
+                      : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Icon className="w-4 h-4" />
+                    <span>{item.label}</span>
+                  </div>
+                  {item.badge !== undefined && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </header>
