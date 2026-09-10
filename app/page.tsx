@@ -37,6 +37,7 @@ import type { MatchResult } from "@/lib/types/match";
 import type { ResumeOptimizationResult } from "@/lib/types/optimization";
 import type { SavedJobRow } from "@/lib/db/types";
 import { useAuth } from "@/lib/context/AuthContext";
+import { useSubscriptionStore } from "@/lib/subscriptions/subscription-store";
 import {
   saveUserResumeAndAnalysis,
   getLatestUserResume,
@@ -58,6 +59,14 @@ import {
 export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
+  const { refresh: refreshSubscription } = useSubscriptionStore();
+
+  // Refresh subscription status whenever the auth state changes
+  useEffect(() => {
+    if (user) {
+      refreshSubscription();
+    }
+  }, [user, refreshSubscription]);
 
   const [currentTab, setCurrentTab] = useState<NavTab>("landing");
   const [analysisResult, setAnalysisResult] = useState<ResumeAnalysisResult | null>(null);
@@ -239,9 +248,15 @@ export default function Home() {
         }),
       });
 
-      const result = await response.json();
+            const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (response.status === 429) {
+          // Usage limit exceeded - set specific error and navigate to pricing
+          setMatchError(result.error || "Monthly usage limit reached.");
+          setCurrentTab("dashboard");
+          return;
+        }
         throw new Error(result.error || "Failed to analyze job match.");
       }
 
@@ -301,9 +316,18 @@ export default function Home() {
         }),
       });
 
-      const data = await response.json();
+            const data = await response.json();
 
       if (!response.ok || !data.success) {
+        if (response.status === 429) {
+          // Usage limit exceeded - set specific error and navigate to dashboard
+          setOptimizationError(
+            data.error || "Monthly usage limit reached. Please upgrade your plan."
+          );
+          setIsOptimizerOpen(false);
+          setCurrentTab("dashboard");
+          return;
+        }
         throw new Error(data.error || "Failed to generate resume optimization.");
       }
 
@@ -563,10 +587,15 @@ export default function Home() {
             </p>
           </div>
 
-          <ResumeUploader
+                    <ResumeUploader
             onAnalysisSuccess={handleAnalysisSuccess}
             isLoading={isUploading}
             setIsLoading={setIsUploading}
+            // Quota messages stay on the analyzer screen. Navigation to pricing
+            // happens ONLY when the user explicitly clicks "View Plans".
+            onViewPlans={() => {
+              setCurrentTab("pricing");
+            }}
           />
 
           {/* Feature Highlights */}

@@ -1,23 +1,48 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   CheckCircle2,
   Sparkles,
   ChevronDown,
   ChevronUp,
+  Loader2,
+  AlertTriangle,
+  Shield,
+  Target,
 } from "lucide-react";
 import type { NavTab } from "@/components/layout/Navbar";
+import { useAuth } from "@/lib/context/AuthContext";
+import { useSubscriptionStore } from "@/lib/subscriptions/subscription-store";
+import { PLANS, getAnnualSavingsPercent, type PlanTier } from "@/lib/subscriptions/config";
+import { useRazorpay } from "react-razorpay";
+import type { RazorpayOrderOptions } from "react-razorpay";
 
 interface PricingViewProps {
   onSelectTab: (tab: NavTab) => void;
 }
 
 export default function PricingView({ onSelectTab }: PricingViewProps) {
-  const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">("monthly");
+  const { user } = useAuth();
+  const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">(
+    "monthly"
+  );
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [loadingPlan, setLoadingPlan] = useState<PlanTier | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const { subscription, refresh } = useSubscriptionStore();
+  const {
+    error: razorpayLoadError,
+    isLoading: razorpayLoading,
+    Razorpay,
+  } = useRazorpay();
 
-  const discountPercent = 20;
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // ~17% saved by paying annually (derived from the server pricing config)
+  const discountPercent = getAnnualSavingsPercent("pro");
 
   const faqs = [
     {
@@ -33,13 +58,136 @@ export default function PricingView({ onSelectTab }: PricingViewProps) {
       a: "ResumeAI supports PDF, DOCX, and plain TXT files. Extraction is executed securely in your session.",
     },
     {
-      q: "Is payment processing active currently?",
-      a: "No. The subscription plans shown here reflect upcoming tiers. All core features (Upload, ATS Scorecard, Job Search, Job Match, and Optimizer) are accessible for free during this phase.",
+      q: "How do I upgrade to a paid plan?",
+      a: "Select your desired plan (Pro or Premium), complete the secure Razorpay checkout, and your subscription will be activated immediately. Use the provided test card details in sandbox mode.",
+    },
+    {
+      q: "Can I cancel my subscription?",
+      a: "Yes. You can cancel at any time from your subscription settings. You will retain access until the end of your current billing period.",
     },
   ];
 
   const toggleFaq = (idx: number) => {
     setOpenFaq(openFaq === idx ? null : idx);
+  };
+
+  const handleCheckout = async (planTier: PlanTier) => {
+    if (planTier === "free") return;
+
+    if (!user) {
+      setCheckoutError("Please sign in to subscribe to a plan.");
+      return;
+    }
+
+    if (!Razorpay) {
+      setCheckoutError(
+        razorpayLoadError ||
+          "Razorpay checkout script could not be loaded. Check your connection and try again."
+      );
+      return;
+    }
+
+    setLoadingPlan(planTier);
+    setCheckoutError(null);
+
+    try {
+      // 1. Create order on the server (server determines plan and price)
+      const createRes = await fetch("/api/subscription/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planTier }),
+      });
+
+      const createJson = await createRes.json();
+
+      if (!createRes.ok) {
+        throw new Error(
+          createJson.error || "Failed to create checkout order."
+        );
+      }
+
+      if (!createJson.success || !createJson.data) {
+        throw new Error("Invalid response from create-order endpoint.");
+      }
+
+      const orderData = createJson.data;
+
+      // 2. Configure Razorpay Checkout (client-side only, using public key ID)
+      const options: RazorpayOrderOptions = {
+        key: orderData.keyId,
+        order_id: orderData.orderId,
+        name: "ResumeAI",
+        description: `${orderData.planName} Plan`,
+        amount: orderData.amount,
+        currency: orderData.currency || "INR",
+        prefill: {
+          name: orderData.userName || "",
+          email: orderData.userEmail || "",
+        },
+        theme: {
+          color: "#2563eb",
+        },
+        handler: async (response: {
+          razorpay_order_id: string;
+          razorpay_payment_id: string;
+          razorpay_signature: string;
+        }) => {
+          // 3. Verify payment on the server
+          const verifyRes = await fetch("/api/subscription/verify-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            }),
+          });
+
+          const verifyJson = await verifyRes.json();
+
+          if (verifyJson.success) {
+            // 4. Refresh subscription status (authoritative server state)
+            await refresh();
+            setCheckoutError(null);
+            onSelectTab("dashboard");
+          } else {
+            console.error("Payment verification failed:", verifyJson);
+            setCheckoutError(
+              verifyJson.error ||
+                "Payment verification failed. Please try again."
+            );
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            // Checkout closed without completing (cancelled / dismissed)
+            setLoadingPlan(null);
+          },
+        },
+      };
+
+      const razorpayInstance = new Razorpay(options);
+
+      // Handle explicit payment failure event from Razorpay
+      razorpayInstance.on("payment.failed", (failureResponse) => {
+        const description =
+          failureResponse?.error?.description ||
+          "Your payment was not completed.";
+        setCheckoutError(description);
+        setLoadingPlan(null);
+      });
+
+      razorpayInstance.open();
+    } catch (err: unknown) {
+      console.error("Checkout error:", err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : "An error occurred while initiating checkout.";
+      setCheckoutError(message);
+    } finally {
+      setLoadingPlan(null);
+    }
   };
 
   return (
@@ -79,178 +227,238 @@ export default function PricingView({ onSelectTab }: PricingViewProps) {
                 : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
             }`}
           >
-            <span>Annual Billing</span>
-            <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+            Annual Billing
+            <span className="inline-flex items-center px-1.5 py-0.25 rounded bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold">
               Save {discountPercent}%
             </span>
           </button>
         </div>
       </div>
 
-      {/* Pricing Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
-        {/* Plan 1: Free Starter */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs flex flex-col justify-between">
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Free Starter</h3>
-              <p className="text-xs text-zinc-500 mt-1">Core resume parsing & ATS evaluation.</p>
-            </div>
-
-            <div className="flex items-baseline gap-1">
-              <span className="text-4xl font-extrabold text-zinc-900 dark:text-zinc-50">$0</span>
-              <span className="text-xs text-zinc-500 font-semibold">/ month</span>
-            </div>
-
-            <div className="space-y-2.5 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs">
-              <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
-                Included Features
-              </span>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>PDF, DOCX & TXT Extraction</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>0-100 ATS Scorecard & Pillars</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>Live Job Search & Filters</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>Standard AI Job Matching</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-400 line-through">
-                <span>Resume Tailoring Optimizer</span>
-              </div>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => onSelectTab("analyzer")}
-            className="w-full py-3 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-          >
-            Current Active Plan
-          </button>
+      {/* Checkout Error Message */}
+      {checkoutError && (
+        <div className="flex items-center gap-3 p-4 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 rounded-xl">
+          <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0" />
+          <p className="text-sm text-rose-800 dark:text-rose-300">{checkoutError}</p>
         </div>
+      )}
 
-        {/* Plan 2: Pro Career (Popular) */}
-        <div className="bg-white dark:bg-zinc-900 border-2 border-blue-600 dark:border-blue-500 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl relative flex flex-col justify-between">
-          <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3.5 py-1 rounded-full text-[10px] font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 text-white uppercase tracking-wider shadow-xs">
-            Most Popular
-          </span>
+      {/* Current Plan Indicator */}
+      {subscription && subscription.planTier !== "free" && (
+        <div className="text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-100 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 rounded-full text-xs font-bold">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Your current plan: {subscription.plan?.name || subscription.planTier}</span>
+          </div>
+        </div>
+      )}
 
+      {/* Pricing Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
+        {/* Free Tier */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs relative">
           <div className="space-y-4">
-            <div>
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Pro Career</h3>
-              <p className="text-xs text-zinc-500 mt-1">Full ATS optimization & AI tailoring.</p>
+            <div className="w-12 h-12 bg-zinc-100 dark:bg-zinc-800 rounded-xl flex items-center justify-center">
+              <Shield className="w-6 h-6 text-zinc-600 dark:text-zinc-400" />
             </div>
-
-            <div className="flex items-baseline gap-1">
-              <span className="text-4xl font-extrabold text-zinc-900 dark:text-zinc-50">
-                {billingCycle === "annual" ? "$15" : "$19"}
-              </span>
-              <span className="text-xs text-zinc-500 font-semibold">/ month</span>
-            </div>
-
-            <div className="space-y-2.5 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs">
-              <span className="text-[11px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider block">
-                Everything in Free, plus:
-              </span>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>Zero-Hallucination Resume Optimizer</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>Original vs Suggested Bullet Rewrites</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>Grounded Keyword Suggestions</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>Detailed Skill Gap Diagnosis</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>Priority Gemini Flash Speed</span>
-              </div>
-            </div>
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">{PLANS.free.name}</h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">{PLANS.free.description}</p>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-extrabold text-zinc-900 dark:text-zinc-100">₹0</span>
+              <span className="text-xs text-zinc-500">/ month</span>
+            </div>
+
             <button
               type="button"
-              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              onClick={() => onSelectTab("dashboard")}
+              className={`w-full py-3 rounded-xl text-xs font-bold transition-colors ${
+                subscription?.planTier === "free"
+                  ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 cursor-default"
+                  : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 cursor-pointer"
+              }`}
             >
-              Coming Soon in Phase 6
+              {subscription?.planTier === "free" ? "Current Plan" : "Start with Free"}
             </button>
             <p className="text-[10px] text-center text-zinc-400">
-              Currently free during developer testing
+              No credit card required
             </p>
+          </div>
+
+          <div className="space-y-2 pt-4 border-t border-zinc-100 dark:border-zinc-800">
+            <span className="text-xs font-bold text-zinc-400 uppercase">Features</span>
+            <div className="space-y-2">
+              {PLANS.free.features.map((feature, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <span className="text-xs text-zinc-600 dark:text-zinc-400">{feature}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Plan 3: Premium Executive */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs flex flex-col justify-between">
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Premium Executive</h3>
-              <p className="text-xs text-zinc-500 mt-1">For active multi-industry applicants.</p>
-            </div>
-
-            <div className="flex items-baseline gap-1">
-              <span className="text-4xl font-extrabold text-zinc-900 dark:text-zinc-50">
-                {billingCycle === "annual" ? "$31" : "$39"}
-              </span>
-              <span className="text-xs text-zinc-500 font-semibold">/ month</span>
-            </div>
-
-            <div className="space-y-2.5 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs">
-              <span className="text-[11px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider block">
-                Everything in Pro, plus:
-              </span>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>Multi-Resume Version Management</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>Job Application Pipeline Tracker</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>Export to Formatted DOCX / PDF</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>VIP Support Channel</span>
-              </div>
-            </div>
+        {/* Pro Tier */}
+        <div className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 border-2 border-blue-200 dark:border-blue-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs relative">
+          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-0.5 rounded-full">
+            {PLANS.pro.badge}
           </div>
 
-          <div className="space-y-2">
-            <button
-              type="button"
-              className="w-full py-3 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-            >
-              Coming Soon in Phase 6
-            </button>
-            <p className="text-[10px] text-center text-zinc-400">
-              No credit card or payments required now
-            </p>
+          <div className="space-y-4">
+            <div className="w-12 h-12 bg-blue-100 dark:bg-blue-950/40 rounded-xl flex items-center justify-center">
+              <Sparkles className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+            </div>
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">{PLANS.pro.name}</h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">{PLANS.pro.description}</p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-extrabold text-blue-600 dark:text-blue-400">
+                ₹{PLANS.pro.pricing[billingCycle].priceInRupees}
+              </span>
+              <span className="text-xs text-zinc-500">
+                {billingCycle === "annual" ? "/ year" : "/ month"}
+              </span>
+            </div>
+            {billingCycle === "annual" && (
+              <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                ≈ ₹{Math.round(PLANS.pro.pricing.annual.priceInRupees / 12)}/month equivalent
+              </p>
+            )}
+
+            {subscription?.planTier === "pro" ? (
+              <button
+                type="button"
+                className="w-full py-3 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold cursor-default"
+              >
+                Current Plan
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleCheckout("pro")}
+                disabled={loadingPlan === "pro" || !user || razorpayLoading}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {loadingPlan === "pro" ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  "Get Pro"
+                )}
+              </button>
+            )}
+
+            {!user && (
+              <p className="text-[10px] text-center text-zinc-400">
+                Sign in to subscribe
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2 pt-4 border-t border-zinc-100 dark:border-zinc-800">
+            <span className="text-xs font-bold text-zinc-400 uppercase">What&apos;s included</span>
+            <div className="space-y-2">
+              {PLANS.pro.features.map((feature, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <span className="text-xs text-zinc-600 dark:text-zinc-400">{feature}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Premium Tier */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs relative">
+          <div className="space-y-4">
+            <div className="w-12 h-12 bg-purple-100 dark:bg-purple-950/40 rounded-xl flex items-center justify-center">
+              <Target className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+            </div>
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">{PLANS.premium.name}</h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">{PLANS.premium.description}</p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-extrabold text-purple-600 dark:text-purple-400">
+                ₹{PLANS.premium.pricing[billingCycle].priceInRupees}
+              </span>
+              <span className="text-xs text-zinc-500">
+                {billingCycle === "annual" ? "/ year" : "/ month"}
+              </span>
+            </div>
+            {billingCycle === "annual" && (
+              <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                ≈ ₹{Math.round(PLANS.premium.pricing.annual.priceInRupees / 12)}/month equivalent
+              </p>
+            )}
+
+            {subscription?.planTier === "premium" ? (
+              <button
+                type="button"
+                className="w-full py-3 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold cursor-default"
+              >
+                Current Plan
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleCheckout("premium")}
+                disabled={loadingPlan === "premium" || !user || razorpayLoading}
+                className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {loadingPlan === "premium" ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  "Get Premium"
+                )}
+              </button>
+            )}
+
+            {!user && (
+              <p className="text-[10px] text-center text-zinc-400">
+                Sign in to subscribe
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2 pt-4 border-t border-zinc-100 dark:border-zinc-800">
+            <span className="text-xs font-bold text-zinc-400 uppercase">Everything in Pro, plus</span>
+            <div className="space-y-2">
+              {PLANS.premium.features.map((feature, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <span className="text-xs text-zinc-600 dark:text-zinc-400">{feature}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ================================================================ */}
-      {/* FAQ ACCORDION SECTION                                            */}
-      {/* ================================================================ */}
+      {/* Test Mode Notice */}
+      <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 rounded-xl">
+        <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+            Test Mode Active
+          </p>
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            Payments are processed through Razorpay&apos;s test environment. Use test card: 4111 1111 1111 1111 with any future date and any CVV. No real charges will be made.
+          </p>
+        </div>
+      </div>
+
+      {/* FAQ Accordion Section */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs">
         <div className="space-y-1">
           <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
@@ -291,3 +499,4 @@ export default function PricingView({ onSelectTab }: PricingViewProps) {
     </div>
   );
 }
+

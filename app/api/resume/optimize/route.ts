@@ -5,6 +5,13 @@ import { ParsedResumeSchema } from "@/lib/ai/schemas";
 import type { ParsedResume } from "@/lib/types/resume";
 import type { Job } from "@/lib/types/job";
 import type { MatchResult } from "@/lib/types/match";
+import { createClient } from "@/lib/supabase/server";
+import {
+  checkFeatureUsageLimit,
+  reserveFeatureUsage,
+  releaseFeatureUsage,
+} from "@/lib/subscriptions/service";
+import { PLANS } from "@/lib/subscriptions/config";
 
 export const runtime = "nodejs";
 
@@ -72,14 +79,95 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { resume, job, matchResult } = validated.data as {
+        const { resume, job, matchResult } = validated.data as {
       resume: ParsedResume;
       job: Job;
       matchResult?: MatchResult | null;
     };
 
-    // Call Gemini to generate optimization suggestions
-    const optimization = await optimizeResumeWithGemini(resume, job, matchResult);
+    // Server-side usage limit check for resume_optimizations
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    let userId: string | null = null;
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      userId = session.user.id;
+    } else if (user?.id) {
+      userId = user.id;
+    }
+
+    const usageResult = await checkFeatureUsageLimit(
+      userId,
+      "resume_optimizations"
+    );
+
+    if (!usageResult.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: usageResult.error || "Usage limit exceeded",
+          code: usageResult.reason || "LIMIT_EXCEEDED",
+          usage: {
+            currentUsage: usageResult.currentUsage,
+            limit: usageResult.limit,
+            planTier: usageResult.planTier,
+          },
+        },
+        { status: 429 }
+      );
+    }
+
+    // Atomically reserve a usage credit BEFORE the AI call. This replaces the
+    // previous TOCTOU pattern (check then separate increment) with a single
+    // PostgreSQL transaction (reserve_feature_usage RPC with row locking),
+    // so concurrent requests cannot collectively exceed the plan limit.
+    if (userId) {
+      const planLimit =
+        PLANS[usageResult.planTier]?.limits.resume_optimizations ?? 0;
+      const reservation = await reserveFeatureUsage(
+        userId,
+        "resume_optimizations",
+        planLimit
+      );
+
+      if (!reservation.granted) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: reservation.error || "Usage limit exceeded",
+            code: reservation.reason || "LIMIT_EXCEEDED",
+            usage: {
+              currentUsage: reservation.currentUsage,
+              limit: reservation.limit,
+              planTier: usageResult.planTier,
+            },
+          },
+          { status: 429 }
+        );
+      }
+    }
+
+    // Call Gemini to generate optimization suggestions.
+    // On AI failure the reserved credit is released, so failed operations
+    // never consume quota; the error propagates to the outer handler (which
+    // maps Gemini quota errors to the 429 QUOTA_ERROR response).
+    let optimization;
+    try {
+      optimization = await optimizeResumeWithGemini(resume, job, matchResult);
+    } catch (aiErr) {
+      if (userId) {
+        await releaseFeatureUsage(userId, "resume_optimizations");
+      }
+      throw aiErr;
+    }
+
+    // Usage credit was atomically reserved above and the AI call succeeded.
 
     return NextResponse.json({
       success: true,

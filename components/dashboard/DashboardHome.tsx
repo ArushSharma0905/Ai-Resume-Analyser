@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import Link from "next/link";
 import {
   FileCheck2,
@@ -25,6 +25,8 @@ import type { ResumeOptimizationResult } from "@/lib/types/optimization";
 import type { SavedJobRow } from "@/lib/db/types";
 import type { NavTab } from "@/components/layout/Navbar";
 import { useAuth } from "@/lib/context/AuthContext";
+import { useSubscriptionStore } from "@/lib/subscriptions/subscription-store";
+import SubscriptionStatus from "@/components/subscription/SubscriptionStatus";
 
 export interface SessionMatchItem {
   job: Job;
@@ -88,11 +90,19 @@ export default function DashboardHome({
   onOptimizeJob,
   onRemoveSavedJob,
 }: DashboardHomeProps) {
-  const { user, profile } = useAuth();
+    const { user, profile } = useAuth();
+  const { refresh: refreshSubscription } = useSubscriptionStore();
 
   const hasResume = !!analysisResult?.parsedResume;
   const atsReport = analysisResult?.atsScoreReport;
   const parsed = analysisResult?.parsedResume;
+
+  // Refresh subscription status when user changes
+  useEffect(() => {
+    if (user) {
+      refreshSubscription();
+    }
+  }, [user, refreshSubscription]);
 
   // Personalized user greeting
   const greetingName =
@@ -207,8 +217,15 @@ export default function DashboardHome({
             >
               <UserPlus className="w-3.5 h-3.5" />
               <span>Sign Up Free</span>
-            </Link>
+                                      </Link>
+            </div>
           </div>
+      )}
+
+      {/* Subscription Status & Usage Section */}
+      {user && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs">
+          <SubscriptionStatus onSelectTab={onSelectTab} />
         </div>
       )}
 

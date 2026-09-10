@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
 
     const query = searchParams.get("query") || searchParams.get("q") || undefined;
     const location = searchParams.get("location") || undefined;
+    const country = searchParams.get("country")?.trim() || undefined;
     const remoteParam = searchParams.get("remote");
     const isRemote =
       remoteParam === "true" || remoteParam === "1"
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
     const filters: JobSearchFilters = {
       query,
       location,
+      country,
       isRemote,
       employmentType,
       experienceLevel,
@@ -63,6 +65,7 @@ export async function POST(request: NextRequest) {
     const filters: JobSearchFilters = {
       query: body.query || undefined,
       location: body.location || undefined,
+      country: typeof body.country === "string" ? body.country.trim() || undefined : undefined,
       isRemote: typeof body.isRemote === "boolean" ? body.isRemote : undefined,
       employmentType: body.employmentType || "all",
       experienceLevel: body.experienceLevel || "all",

@@ -1,17 +1,27 @@
 -- ==============================================================================
--- PHASE 6: SUPABASE DATABASE SCHEMA & ROW LEVEL SECURITY (RLS)
+-- MIGRATION 01: PHASE 6 — FOUNDATIONAL SCHEMA & ROW LEVEL SECURITY
 -- AI Resume Analyzer & ATS Career Intelligence Platform
 -- ==============================================================================
--- Instructions:
--- 1. Open your Supabase project dashboard: https://supabase.com/dashboard
--- 2. Go to the "SQL Editor" tab from the left sidebar.
--- 3. Click "New Query", paste the entire contents of this file, and click "Run".
--- 4. All tables, foreign key constraints, indexes, triggers, and RLS policies
---    will be created safely (using IF NOT EXISTS / CREATE OR REPLACE).
+-- Reconstructed from the Phase 6 schema (supabase/schema.sql, lines 1–346),
+-- which is the base that migrations 02 (subscriptions & usage), 03 (annual
+-- billing), 04 (atomic quota reservation) and 05 (rolling resume-analysis
+-- quota) all build upon.
+--
+-- Creates: pgcrypto extension, profiles, subscriptions, resumes,
+-- resume_analyses, saved_jobs, job_matches, resume_optimizations, performance
+-- indexes, RLS policies, updated_at triggers, and the auth signup trigger
+-- (handle_new_user → profile + default free subscription row).
+--
+-- IDEMPOTENT: every statement is guarded (IF NOT EXISTS / CREATE OR REPLACE /
+-- DROP ... IF EXISTS). Safe to run repeatedly, including against a database
+-- where these objects already exist — existing tables, columns, indexes and
+-- DATA are never dropped or modified.
+--
+-- NO destructive operations: no DROP TABLE, no DELETE, no data migrations.
 -- ==============================================================================
 
 -- ------------------------------------------------------------------------------
--- 1. EXTENSIONS
+-- 1. EXTENSION (gen_random_uuid)
 -- ------------------------------------------------------------------------------
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -28,7 +38,11 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 );
 
 -- ------------------------------------------------------------------------------
--- 3. SUBSCRIPTIONS TABLE (Structure for Phase 7 Stripe/Payment Integration)
+-- 3. SUBSCRIPTIONS TABLE (Structure for Phase 7 Razorpay/Payment Integration)
+--    NOTE: `unique_user_subscription` is required by migrations 02/03, whose
+--    apply_subscription_payment() upserts with ON CONFLICT (user_id).
+--    Payment audit columns (provider_payment_id, currency, amount) and
+--    billing_interval are added by migrations 02 and 03 respectively.
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.subscriptions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -127,6 +141,21 @@ CREATE TABLE IF NOT EXISTS public.resume_optimizations (
   created_at timestamptz DEFAULT now() NOT NULL
 );
 
+-- Safety net for a pre-existing subscriptions table created without the unique
+-- constraint (required by 02/03's ON CONFLICT (user_id) upserts). Additive
+-- only — never drops or alters existing data.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_name = 'subscriptions')
+     AND NOT EXISTS (SELECT 1 FROM pg_constraint
+             WHERE conname = 'unique_user_subscription'
+               AND conrelid = 'public.subscriptions'::regclass) THEN
+    ALTER TABLE public.subscriptions
+      ADD CONSTRAINT unique_user_subscription UNIQUE (user_id);
+  END IF;
+END $$;
+
 -- ------------------------------------------------------------------------------
 -- 9. PERFORMANCE INDEXES
 -- ------------------------------------------------------------------------------
@@ -147,7 +176,6 @@ CREATE INDEX IF NOT EXISTS idx_resume_optimizations_created_at ON public.resume_
 -- Strict Isolation: Users may ONLY access their own records
 -- ------------------------------------------------------------------------------
 
--- Enable RLS on all tables
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.resumes ENABLE ROW LEVEL SECURITY;
@@ -156,7 +184,6 @@ ALTER TABLE public.saved_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.job_matches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.resume_optimizations ENABLE ROW LEVEL SECURITY;
 
--- Profiles policies
 DROP POLICY IF EXISTS "Users can view their own profile" ON public.profiles;
 CREATE POLICY "Users can view their own profile"
   ON public.profiles FOR SELECT
@@ -173,7 +200,6 @@ CREATE POLICY "Users can insert their own profile"
   ON public.profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
--- Subscriptions policies
 DROP POLICY IF EXISTS "Users can view their own subscription" ON public.subscriptions;
 CREATE POLICY "Users can view their own subscription"
   ON public.subscriptions FOR SELECT
@@ -190,7 +216,6 @@ CREATE POLICY "Users can insert their own subscription"
   ON public.subscriptions FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
--- Resumes policies
 DROP POLICY IF EXISTS "Users can view their own resumes" ON public.resumes;
 CREATE POLICY "Users can view their own resumes"
   ON public.resumes FOR SELECT
@@ -212,7 +237,6 @@ CREATE POLICY "Users can delete their own resumes"
   ON public.resumes FOR DELETE
   USING (auth.uid() = user_id);
 
--- Resume Analyses policies
 DROP POLICY IF EXISTS "Users can view their own resume analyses" ON public.resume_analyses;
 CREATE POLICY "Users can view their own resume analyses"
   ON public.resume_analyses FOR SELECT
@@ -277,41 +301,21 @@ CREATE POLICY "Users can insert their own resume optimizations"
   ON public.resume_optimizations FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own resume optimizations" ON public.resume_optimizations;
+CREATE POLICY "Users can update their own resume optimizations"
+  ON public.resume_optimizations FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
 DROP POLICY IF EXISTS "Users can delete their own resume optimizations" ON public.resume_optimizations;
 CREATE POLICY "Users can delete their own resume optimizations"
   ON public.resume_optimizations FOR DELETE
   USING (auth.uid() = user_id);
 
 -- ------------------------------------------------------------------------------
--- 11. AUTOMATIC TIMESTAMPS AND USER CREATION TRIGGERS
+-- 11. SIGNUP TRIGGER (profile + default free subscription)
 -- ------------------------------------------------------------------------------
 
--- Trigger function to update updated_at timestamp
-CREATE OR REPLACE FUNCTION public.handle_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Apply updated_at trigger to relevant tables
-DROP TRIGGER IF EXISTS set_profiles_updated_at ON public.profiles;
-CREATE TRIGGER set_profiles_updated_at
-  BEFORE UPDATE ON public.profiles
-  FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS set_subscriptions_updated_at ON public.subscriptions;
-CREATE TRIGGER set_subscriptions_updated_at
-  BEFORE UPDATE ON public.subscriptions
-  FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS set_resumes_updated_at ON public.resumes;
-CREATE TRIGGER set_resumes_updated_at
-  BEFORE UPDATE ON public.resumes
-  FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
--- Trigger function to automatically create public.profiles and default public.subscriptions on signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -319,12 +323,9 @@ BEGIN
   VALUES (
     NEW.id,
     NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', '')
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', '')
   )
-  ON CONFLICT (id) DO UPDATE
-  SET
-    email = EXCLUDED.email,
-    full_name = CASE WHEN EXCLUDED.full_name <> '' THEN EXCLUDED.full_name ELSE public.profiles.full_name END;
+  ON CONFLICT (id) DO NOTHING;
 
   INSERT INTO public.subscriptions (user_id, plan_tier, status)
   VALUES (
@@ -338,176 +339,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Trigger to execute on auth.users insert
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- ------------------------------------------------------------------------------
--- 12. ROLLING 7-DAY RESUME-ANALYSIS QUOTA (Phase 8)
--- ------------------------------------------------------------------------------
--- FREE users: max 5 SUCCESSFUL resume analyses in ANY rolling 7-day period
--- (NOT calendar-week, NOT monthly). PRO/PREMIUM: unlimited (the API layer never
--- reserves for them). Guests: unchanged existing behavior.
---
--- One row per SUCCESSFUL analysis. The API layer inserts a reservation (via RPC)
--- before the AI call and deletes it if the analysis fails, so failed analyses
--- never consume quota. Access is EXCLUSIVELY via the SECURITY DEFINER RPCs below:
--- RLS is enabled with no client policies and table privileges are revoked from
--- anon/authenticated so clients can never manipulate quota records directly.
--- See supabase/migrations/05_rolling_resume_analysis_quota.sql for full details.
--- ------------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS public.resume_analysis_usage (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_resume_analysis_usage_user_created
-  ON public.resume_analysis_usage(user_id, created_at);
-
-ALTER TABLE public.resume_analysis_usage ENABLE ROW LEVEL SECURITY;
-
-REVOKE ALL ON public.resume_analysis_usage FROM anon;
-REVOKE ALL ON public.resume_analysis_usage FROM authenticated;
-
--- Atomic, concurrency-safe reservation (per-user transaction-level advisory lock).
-CREATE OR REPLACE FUNCTION public.reserve_resume_analysis(
-  p_user_id uuid
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_now timestamptz := now();
-  v_cutoff timestamptz;
-  v_count integer := 0;
-  v_oldest timestamptz;
-  v_reservation_id uuid;
-BEGIN
-  IF p_user_id IS NULL THEN
-    RETURN jsonb_build_object('granted', false, 'error', 'invalid_user');
-  END IF;
-
-  v_cutoff := v_now - make_interval(days => 7);
-
-  PERFORM pg_advisory_xact_lock(
-    hashtextextended('resume_analysis_quota:' || p_user_id::text, 0)
-  );
-
-  SELECT count(*)::int, min(created_at)
-    INTO v_count, v_oldest
-  FROM public.resume_analysis_usage
-  WHERE user_id = p_user_id
-    AND created_at > v_cutoff;
-
-  IF v_count >= 5 THEN
-    RETURN jsonb_build_object(
-      'granted', false,
-      'current_usage', v_count,
-      'limit', 5,
-      'window_days', 7,
-      'next_available_at',
-        CASE WHEN v_oldest IS NOT NULL
-             THEN v_oldest + make_interval(days => 7)
-             ELSE NULL END
-    );
-  END IF;
-
-  INSERT INTO public.resume_analysis_usage (user_id)
-  VALUES (p_user_id)
-  RETURNING id INTO v_reservation_id;
-
-  RETURN jsonb_build_object(
-    'granted', true,
-    'reservation_id', v_reservation_id,
-    'current_usage', v_count + 1,
-    'limit', 5,
-    'window_days', 7,
-    'next_available_at', NULL
-  );
-END;
-$$;
-
--- Idempotent release (used when the AI analysis fails after reservation).
-CREATE OR REPLACE FUNCTION public.release_resume_analysis(
-  p_user_id uuid,
-  p_reservation_id uuid
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_deleted integer := 0;
-BEGIN
-  IF p_user_id IS NULL OR p_reservation_id IS NULL THEN
-    RETURN jsonb_build_object('released', false, 'error', 'invalid_args');
-  END IF;
-
-  DELETE FROM public.resume_analysis_usage
-  WHERE id = p_reservation_id
-    AND user_id = p_user_id;
-
-  GET DIAGNOSTICS v_deleted = ROW_COUNT;
-
-  RETURN jsonb_build_object(
-    'released', v_deleted > 0,
-    'already_released', v_deleted = 0
-  );
-END;
-$$;
-
--- Read-only usage info for status/usage display.
-CREATE OR REPLACE FUNCTION public.get_resume_analysis_usage(
-  p_user_id uuid
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_now timestamptz := now();
-  v_cutoff timestamptz;
-  v_count integer := 0;
-  v_oldest timestamptz;
-BEGIN
-  IF p_user_id IS NULL THEN
-    RETURN jsonb_build_object('error', 'invalid_user');
-  END IF;
-
-  v_cutoff := v_now - make_interval(days => 7);
-
-  SELECT count(*)::int, min(created_at)
-    INTO v_count, v_oldest
-  FROM public.resume_analysis_usage
-  WHERE user_id = p_user_id
-    AND created_at > v_cutoff;
-
-  RETURN jsonb_build_object(
-    'current_usage', v_count,
-    'limit', 5,
-    'window_days', 7,
-    'next_available_at',
-      CASE WHEN v_count >= 5 AND v_oldest IS NOT NULL
-           THEN v_oldest + make_interval(days => 7)
-           ELSE NULL END
-  );
-END;
-$$;
-
-REVOKE EXECUTE ON FUNCTION public.reserve_resume_analysis(uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.reserve_resume_analysis(uuid) TO authenticated, service_role;
-
-REVOKE EXECUTE ON FUNCTION public.release_resume_analysis(uuid, uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.release_resume_analysis(uuid, uuid) TO authenticated, service_role;
-
-REVOKE EXECUTE ON FUNCTION public.get_resume_analysis_usage(uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.get_resume_analysis_usage(uuid) TO authenticated, service_role;
 

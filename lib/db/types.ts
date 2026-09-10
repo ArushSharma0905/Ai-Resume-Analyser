@@ -17,9 +17,14 @@ export interface SubscriptionRow {
   user_id: string;
   status: "active" | "inactive" | "trialing" | "canceled" | "past_due";
   plan_tier: "free" | "pro" | "premium";
+  /** 'monthly' | 'annual' (migration 03). Defaults to 'monthly'. */
+  billing_interval: "monthly" | "annual";
   provider: string | null;
   provider_subscription_id: string | null;
   provider_customer_id: string | null;
+  provider_payment_id: string | null;
+  amount: number | null;
+  currency: string | null;
   current_period_start: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;

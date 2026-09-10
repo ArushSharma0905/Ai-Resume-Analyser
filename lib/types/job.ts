@@ -30,12 +30,16 @@ export interface Job {
   postedDate?: string | null; // ISO string
   applicationUrl: string;
   tags?: string[];
-  provider: string; // e.g. 'mock', 'adzuna'
+  provider: string; // e.g. 'jsearch', 'mock'
 }
 
 export interface JobSearchFilters {
   query?: string;
   location?: string;
+  /** Optional explicit country (e.g. "India" / "in"). When absent, the
+   *  provider infers India from the location/query text. Additive — the API
+   *  and UI keep working without it. */
+  country?: string;
   isRemote?: boolean;
   employmentType?: EmploymentType | "all";
   experienceLevel?: ExperienceLevel | "all";

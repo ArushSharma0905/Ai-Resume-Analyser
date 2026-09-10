@@ -10,13 +10,29 @@ import {
   FileCode2,
   Sparkles,
   ClipboardPaste,
+  Lock,
 } from "lucide-react";
 import type { ResumeAnalysisResult } from "@/lib/types/resume";
+
+/** Structured 429 payload returned by /api/resume/analyze (rolling 7-day quota). */
+interface QuotaLimitInfo {
+  currentUsage: number;
+  limit: number;
+  windowDays: number;
+  planTier?: string;
+  nextAvailableAt?: string | null;
+}
 
 interface ResumeUploaderProps {
   onAnalysisSuccess: (result: ResumeAnalysisResult) => void;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
+  /**
+   * OPTIONAL, explicit navigation only. Called when the user CLICKS the
+   * "View Plans" button on the quota message. Reaching the quota NEVER
+   * navigates away from the analyzer automatically.
+   */
+  onViewPlans?: () => void;
 }
 
 const SAMPLE_RESUME = `Alex Rivera
@@ -67,6 +83,7 @@ export default function ResumeUploader({
   onAnalysisSuccess,
   isLoading,
   setIsLoading,
+  onViewPlans,
 }: ResumeUploaderProps) {
   const [activeTab, setActiveTab] = useState<"file" | "paste">("file");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -74,6 +91,9 @@ export default function ResumeUploader({
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingStep, setLoadingStep] = useState<string>("");
+  // Rolling 7-day quota state — shown INLINE on the analyzer screen. The user
+  // is never auto-redirected to pricing when they hit the free quota.
+  const [limitReached, setLimitReached] = useState<QuotaLimitInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -123,10 +143,12 @@ export default function ResumeUploader({
     setActiveTab("paste");
     setPastedText(SAMPLE_RESUME);
     setError(null);
+    setLimitReached(null);
   };
 
   const handleAnalyze = async () => {
     setError(null);
+    setLimitReached(null);
     setIsLoading(true);
     setLoadingStep("Reading document...");
 
@@ -159,6 +181,18 @@ export default function ResumeUploader({
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        // Rolling 7-day free quota reached (HTTP 429): show an inline message on
+        // the analyzer screen. Do NOT redirect anywhere automatically.
+        if (response.status === 429) {
+          setLimitReached({
+            currentUsage: result.usage?.currentUsage ?? 5,
+            limit: result.usage?.limit ?? 5,
+            windowDays: result.usage?.windowDays ?? 7,
+            planTier: result.usage?.planTier ?? "free",
+            nextAvailableAt: result.usage?.nextAvailableAt ?? null,
+          });
+          return;
+        }
         throw new Error(result.error || "Failed to analyze resume.");
       }
 
@@ -183,6 +217,7 @@ export default function ResumeUploader({
             onClick={() => {
               setActiveTab("file");
               setError(null);
+              setLimitReached(null);
             }}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
               activeTab === "file"
@@ -198,6 +233,7 @@ export default function ResumeUploader({
             onClick={() => {
               setActiveTab("paste");
               setError(null);
+              setLimitReached(null);
             }}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
               activeTab === "paste"
@@ -311,6 +347,36 @@ export default function ResumeUploader({
           <div className="flex-1">
             <p className="font-medium">Analysis Failed</p>
             <p className="text-xs mt-0.5">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Rolling 7-Day Free Quota Reached (inline — never redirects anywhere) */}
+      {limitReached && (
+        <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl flex items-start gap-3 text-amber-800 dark:text-amber-300 text-sm">
+          <Lock className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="flex-1 space-y-1">
+            <p className="font-medium">
+              Resume analysis limit reached — you&apos;ve used {limitReached.currentUsage} of{" "}
+              {limitReached.limit} free analyses in the last {limitReached.windowDays} days.
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              Your next analysis becomes available when the oldest analysis leaves the{" "}
+              {limitReached.windowDays}-day window.
+              {limitReached.nextAvailableAt &&
+                ` Next slot: ${new Date(limitReached.nextAvailableAt).toLocaleString()}`}
+            </p>
+            {onViewPlans && (
+              <button
+                type="button"
+                onClick={onViewPlans}
+                disabled={isLoading}
+                className="mt-2 inline-flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                View Plans
+              </button>
+            )}
           </div>
         </div>
       )}
